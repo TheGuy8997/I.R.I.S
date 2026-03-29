@@ -49,7 +49,7 @@ iris/en_US-ryan-medium.onnx
 ## 6. Setup Ollama model
 ```bash
 ollama pull gemma2:2b
-ollama create iris -f Modelfile
+ollama create iris -f modelfile
 ```
 
 ## 7. File structure
