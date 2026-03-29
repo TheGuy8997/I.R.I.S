@@ -45,9 +45,13 @@ ollama create iris -f Modelfile
 
 ## 7. File structure
 iris/
+
 ├── iriscore.py
+
 ├── en_US-ryan-medium.onnx
+
 ├── models/
+
 │   └── vosk/
 │       ├── am/
 │       ├── conf/
@@ -55,7 +59,9 @@ iris/
 │       ├── ivector/
 │       └── ...
 ├── weather.py
+
 └── news.py
+
 
 ## 8. Run
 python iriscore.py
