@@ -34,14 +34,14 @@ def get_user_location():
     except Exception as e:
         print(f"[LOCATION ERROR] {e}")
     
-    # Fallback to Rochester, NY (based on your log)
-    return {
-        "latitude": 43.1566,
-        "longitude": -77.6088,
-        "city": "Rochester",
-        "region": "NY",
-        "country": "USA"
-    }
+# Fallback to Rochester, MN
+return {
+    "latitude": 44.0121,
+    "longitude": -92.4802,
+    "city": "Rochester",
+    "region": "MN",
+    "country": "USA"
+}
 
 # =========================
 # WEATHER DATA FUNCTIONS
@@ -68,6 +68,8 @@ def get_detailed_weather(location=None):
         "current": "temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,showers,snowfall,cloud_cover",
         "hourly": "temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,precipitation_probability,precipitation,rain,showers,snowfall,cloud_cover,visibility",
         "daily": "weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,precipitation_sum,rain_sum,showers_sum,snowfall_sum,precipitation_hours,precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max",
+        "temperature_unit": "fahrenheit",
+        "windspeed_unit": "mph",
         "timezone": "auto",
         "forecast_days": 7
     }
@@ -178,9 +180,9 @@ def get_weather_context():
     forecast_text = "\n".join(forecast_lines) if forecast_lines else "Forecast unavailable"
     
     context = f"""Current weather in {summary['location']}:
-Temperature: {summary['temperature']}°C (feels like {summary['apparent_temperature']}°C)
+Temperature: {summary['temperature']}°C (feels like {summary['apparent_temperature']}°F)
 Conditions: {summary['weather']}
-Wind: {summary['wind_speed']} km/h
+Wind: {summary['wind_speed']} mph
 Humidity: {summary['humidity']}%
 
 3-day forecast:
