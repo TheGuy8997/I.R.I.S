@@ -47,7 +47,7 @@ except Exception as e:
 # =========================
 VOSK_MODEL_PATH = "models/vosk"
 WAKE_WORD = "iris"
-MIC_DEVICE_INDEX = 2
+MIC_DEVICE_INDEX = "ZTD39 Device"
 MIC_SR = 48000
 VOSK_SR = 16000
 BLOCKSIZE = 9600
