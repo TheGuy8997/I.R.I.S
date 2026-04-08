@@ -180,9 +180,9 @@ def get_weather_context():
     forecast_text = "\n".join(forecast_lines) if forecast_lines else "Forecast unavailable"
     
     context = f"""Current weather in {summary['location']}:
-Temperature: {summary['temperature']}°F (feels like {summary['apparent_temperature']}°F)
+Temperature: {summary['temperature']}°Fahrenheit (feels like {summary['apparent_temperature']}°Fahrenheit)
 Conditions: {summary['weather']}
-Wind: {summary['wind_speed']} mph
+Wind: {summary['wind_speed']} miles per hour
 Humidity: {summary['humidity']}%
 
 3-day forecast:
@@ -207,6 +207,6 @@ def handle_weather_command(text):
         if isinstance(summary, str):
             return summary
         
-        return f"The current weather in {summary['location']} is {summary['weather']} with a temperature of {summary['temperature']}°C, wind speed of {summary['wind_speed']} km/h, and humidity at {summary['humidity']}%."
+        return f"The current weather in {summary['location']} is {summary['weather']} with a temperature of {summary['temperature']}°Fahrenheit, wind speed of {summary['wind_speed']} miles per hour, and humidity at {summary['humidity']}%."
     
     return None
