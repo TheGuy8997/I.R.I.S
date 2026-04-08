@@ -35,7 +35,7 @@ def get_user_location():
         print(f"[LOCATION ERROR] {e}")
     
 # Fallback to Rochester, MN
-return {
+    return {
     "latitude": 44.0121,
     "longitude": -92.4802,
     "city": "Rochester",
@@ -180,7 +180,7 @@ def get_weather_context():
     forecast_text = "\n".join(forecast_lines) if forecast_lines else "Forecast unavailable"
     
     context = f"""Current weather in {summary['location']}:
-Temperature: {summary['temperature']}°C (feels like {summary['apparent_temperature']}°F)
+Temperature: {summary['temperature']}°F (feels like {summary['apparent_temperature']}°F)
 Conditions: {summary['weather']}
 Wind: {summary['wind_speed']} mph
 Humidity: {summary['humidity']}%
