@@ -72,39 +72,15 @@ VAD_SMOOTHING = 3
 vad_counter = 0
 
 # =========================
-# AUDIO ENGINE (FIXED - NO SAMPLE RATE CALLBACK ISSUES)
+# AUDIO ENGINE (FIXED - BLOCKING STREAM WRITE)
 # =========================
 voice = PiperVoice.load(PIPER_VOICE)
-
 stop_speaking_flag = False
-audio_play_queue = queue.Queue()
-
-
-def audio_player():
-    with sd.RawOutputStream(
-        samplerate=PIPER_SR,
-        channels=1,
-        dtype="int16"
-    ) as stream:
-        while True:
-            data = audio_play_queue.get()
-            if data is None:
-                break
-            try:
-                stream.write(data)
-            except Exception:
-                pass
 
 
 def stop_speaking():
     global stop_speaking_flag
     stop_speaking_flag = True
-
-    while not audio_play_queue.empty():
-        try:
-            audio_play_queue.get_nowait()
-        except queue.Empty:
-            break
 
 
 def speak(text):
@@ -112,23 +88,41 @@ def speak(text):
 
     stop_speaking_flag = False
 
-    for sentence in re.split(r'(?<=[.!?])\s+', text):
-        if stop_speaking_flag:
-            break
+    try:
+        stream = sd.RawOutputStream(
+            samplerate=PIPER_SR,
+            channels=1,
+            dtype="int16",
+            blocksize=1024
+        )
+        stream.start()
 
-        sentence = sentence.strip()
-        if not sentence:
-            continue
-
-        print("I.R.I.S.:", sentence)
-
-        for chunk in voice.synthesize(sentence):
+        for sentence in re.split(r'(?<=[.!?])\s+', text):
             if stop_speaking_flag:
                 break
-            try:
-                audio_play_queue.put_nowait(chunk.audio_int16_bytes)
-            except queue.Full:
-                pass
+
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+
+            print("I.R.I.S.:", sentence)
+
+            for chunk in voice.synthesize(sentence):
+                if stop_speaking_flag:
+                    break
+
+                try:
+                    stream.write(chunk.audio_int16_bytes)
+                except Exception:
+                    stop_speaking_flag = True
+                    break
+
+    finally:
+        try:
+            stream.stop()
+            stream.close()
+        except Exception:
+            pass
 
 # =========================
 # TEXT UTILS
@@ -279,7 +273,6 @@ def cli_loop():
 def main():
     print("[IRIS] Starting... Say 'iris' to wake.")
 
-    threading.Thread(target=audio_player, daemon=True).start()
     threading.Thread(target=process_audio, daemon=True).start()
 
     with sd.RawInputStream(
