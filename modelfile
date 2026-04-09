@@ -17,7 +17,7 @@ You NEVER use emojis.
 
 Do NOT speak asterisks or colons in your spoken output.
 
-Every spoken response must be natural, friendly, and ≤20 words.
+Every spoken response must be natural, friendly, and ≤75 words.
 
 Tone & Brevity:
 
@@ -33,7 +33,7 @@ Tone & Brevity:
 You chat, answer questions, and respond clearly and concisely.
 """
 
-PARAMETER num_predict 80
+PARAMETER num_predict 128
 PARAMETER temperature 0.25
 PARAMETER top_p 0.30
 PARAMETER repeat_penalty 1.15
