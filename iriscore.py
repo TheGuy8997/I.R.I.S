@@ -50,7 +50,6 @@ CHANNELS = 1
 DTYPE = "int16"
 
 PIPER_VOICE = "en_US-ryan-medium.onnx"
-APLAY_DEVICE = "USB2.0 Device"
 PIPER_SR = 22050
 
 MIN_TEXT_LEN = 3
@@ -73,38 +72,37 @@ VAD_SMOOTHING = 3
 vad_counter = 0
 
 # =========================
-# AUDIO ENGINE (FIXED STREAMING)
+# AUDIO ENGINE (FIXED - NO SAMPLE RATE CALLBACK ISSUES)
 # =========================
 voice = PiperVoice.load(PIPER_VOICE)
 
-audio_q_out = queue.Queue(maxsize=50)
-audio_stream = None
 stop_speaking_flag = False
+audio_play_queue = queue.Queue()
 
 
-def audio_callback_out(outdata, frames, time_info, status):
-    try:
-        data = audio_q_out.get_nowait()
-    except queue.Empty:
-        outdata[:] = np.zeros((frames, 1), dtype=np.int16)
-        return
-
-    audio = np.frombuffer(data, dtype=np.int16)
-
-    if len(audio) < frames:
-        padded = np.zeros(frames, dtype=np.int16)
-        padded[:len(audio)] = audio
-        audio = padded
-
-    outdata[:] = audio.reshape(-1, 1)
+def audio_player():
+    with sd.RawOutputStream(
+        samplerate=PIPER_SR,
+        channels=1,
+        dtype="int16"
+    ) as stream:
+        while True:
+            data = audio_play_queue.get()
+            if data is None:
+                break
+            try:
+                stream.write(data)
+            except Exception:
+                pass
 
 
 def stop_speaking():
     global stop_speaking_flag
     stop_speaking_flag = True
-    while not audio_q_out.empty():
+
+    while not audio_play_queue.empty():
         try:
-            audio_q_out.get_nowait()
+            audio_play_queue.get_nowait()
         except queue.Empty:
             break
 
@@ -128,7 +126,7 @@ def speak(text):
             if stop_speaking_flag:
                 break
             try:
-                audio_q_out.put_nowait(chunk.audio_int16_bytes)
+                audio_play_queue.put_nowait(chunk.audio_int16_bytes)
             except queue.Full:
                 pass
 
@@ -279,19 +277,9 @@ def cli_loop():
 # =========================
 
 def main():
-    global audio_stream
-
     print("[IRIS] Starting... Say 'iris' to wake.")
 
-    audio_stream = sd.OutputStream(
-        samplerate=PIPER_SR,
-        channels=1,
-        dtype="int16",
-        callback=audio_callback_out,
-        blocksize=1024
-    )
-    audio_stream.start()
-
+    threading.Thread(target=audio_player, daemon=True).start()
     threading.Thread(target=process_audio, daemon=True).start()
 
     with sd.RawInputStream(
