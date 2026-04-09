@@ -190,7 +190,7 @@ def get_news_context(text: str) -> str:
 
 def is_news_question(text: str) -> bool:
     keywords = [
-        "news", "headlines", "today", "latest", "current events",
+        "news", "headlines", "today", "current events",
         "breaking", "updates", "what's happening", "happening",
         "roundup", "summary", "stories", "world", "tech", "business"
     ]
