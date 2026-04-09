@@ -175,7 +175,7 @@ def get_weather_context():
     for i in range(len(dates)):
         if i < len(temps_max) and i < len(temps_min) and i < len(weather_codes):
             desc = weather_descriptions.get(weather_codes[i], "unknown")
-            forecast_lines.append(f"{dates[i]}: {desc}, high {temps_max[i]}°C, low {temps_min[i]}°C")
+            forecast_lines.append(f"{dates[i]}: {desc}, high {temps_max[i]}°F, low {temps_min[i]}°F")
     
     forecast_text = "\n".join(forecast_lines) if forecast_lines else "Forecast unavailable"
     
