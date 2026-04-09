@@ -5,7 +5,6 @@ import time
 import re
 import threading
 import sys
-import subprocess
 import numpy as np
 from scipy.signal import resample_poly
 import sounddevice as sd
@@ -42,7 +41,7 @@ except Exception:
 VOSK_MODEL_PATH = "models/vosk"
 WAKE_WORD = "iris"
 
-MIC_DEVICE_INDEX = "ZTD39 Device"
+MIC_DEVICE_INDEX = None
 MIC_SR = 48000
 VOSK_SR = 16000
 
@@ -51,7 +50,7 @@ CHANNELS = 1
 DTYPE = "int16"
 
 PIPER_VOICE = "en_US-ryan-medium.onnx"
-APLAY_DEVICE = ""
+APLAY_DEVICE = "USB2.0 Device"
 PIPER_SR = 22050
 
 MIN_TEXT_LEN = 3
@@ -59,7 +58,7 @@ FINAL_COOLDOWN = 0.5
 CONVO_TIMEOUT = 10
 
 # =========================
-# MEMORY (CHAT STYLE)
+# MEMORY
 # =========================
 conversation_history = []
 MAX_HISTORY = 8
@@ -74,6 +73,66 @@ VAD_SMOOTHING = 3
 vad_counter = 0
 
 # =========================
+# AUDIO ENGINE (FIXED STREAMING)
+# =========================
+voice = PiperVoice.load(PIPER_VOICE)
+
+audio_q_out = queue.Queue(maxsize=50)
+audio_stream = None
+stop_speaking_flag = False
+
+
+def audio_callback_out(outdata, frames, time_info, status):
+    try:
+        data = audio_q_out.get_nowait()
+    except queue.Empty:
+        outdata[:] = np.zeros((frames, 1), dtype=np.int16)
+        return
+
+    audio = np.frombuffer(data, dtype=np.int16)
+
+    if len(audio) < frames:
+        padded = np.zeros(frames, dtype=np.int16)
+        padded[:len(audio)] = audio
+        audio = padded
+
+    outdata[:] = audio.reshape(-1, 1)
+
+
+def stop_speaking():
+    global stop_speaking_flag
+    stop_speaking_flag = True
+    while not audio_q_out.empty():
+        try:
+            audio_q_out.get_nowait()
+        except queue.Empty:
+            break
+
+
+def speak(text):
+    global stop_speaking_flag
+
+    stop_speaking_flag = False
+
+    for sentence in re.split(r'(?<=[.!?])\s+', text):
+        if stop_speaking_flag:
+            break
+
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+
+        print("I.R.I.S.:", sentence)
+
+        for chunk in voice.synthesize(sentence):
+            if stop_speaking_flag:
+                break
+            try:
+                audio_q_out.put_nowait(chunk.audio_int16_bytes)
+            except queue.Full:
+                pass
+
+# =========================
 # TEXT UTILS
 # =========================
 
@@ -82,66 +141,6 @@ def clean_for_tts(text):
     text = re.sub(r"[^\x00-\x7F]+", "", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
-
-
-def split_sentences(text):
-    return [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
-
-# =========================
-# AUDIO OUTPUT
-# =========================
-voice = PiperVoice.load(PIPER_VOICE)
-current_audio_process = None
-stop_speaking_flag = False
-
-
-def stop_speaking():
-    global current_audio_process, stop_speaking_flag
-    stop_speaking_flag = True
-    if current_audio_process:
-        try:
-            current_audio_process.kill()
-        except Exception:
-            pass
-        current_audio_process = None
-
-
-def speak(text):
-    global stop_speaking_flag, current_audio_process
-
-    stop_speaking_flag = False
-
-    for sentence in split_sentences(text):
-        if stop_speaking_flag:
-            break
-
-        print("I.R.I.S.:", sentence)
-
-        try:
-            proc = subprocess.Popen(
-                ["aplay",
-                 "-D", APLAY_DEVICE,
-                 "-r", str(PIPER_SR),
-                 "-f", "S16_LE",
-                 "-c", "1",
-                 "-t", "raw",
-                 "--quiet"],
-                stdin=subprocess.PIPE
-            )
-
-            current_audio_process = proc
-
-            for chunk in voice.synthesize(sentence):
-                if stop_speaking_flag:
-                    break
-                proc.stdin.write(chunk.audio_int16_bytes)
-
-            if proc.stdin:
-                proc.stdin.close()
-            proc.wait(timeout=2)
-
-        except Exception:
-            pass
 
 # =========================
 # NEWS HANDLER
@@ -167,7 +166,7 @@ def handle_news(text):
         speak("News is currently unavailable.")
 
 # =========================
-# COMMAND HANDLER (CHAT STYLE MEMORY)
+# COMMAND HANDLER
 # =========================
 
 def handle_command(text):
@@ -175,23 +174,19 @@ def handle_command(text):
 
     print("[IRIS] → Processing:", text)
 
-    # NEWS
     if NEWS_ENABLED and is_news_question(text):
         handle_news(text)
         return
 
-    # WEATHER (inject context only)
+    prompt = text
+
     if WEATHER_ENABLED and is_weather_question(text):
         try:
-            text = f"Context: {get_weather_context()}\nUser: {text}"
+            prompt = f"Context: {get_weather_context()}\nUser: {text}"
         except Exception:
             pass
 
-    # =========================
-    # CHAT STYLE MEMORY (NO MANUAL PROMPT BUILDING)
-    # =========================
-
-    conversation_history.append({"role": "user", "content": text})
+    conversation_history.append({"role": "user", "content": prompt})
     conversation_history[:] = conversation_history[-MAX_HISTORY:]
 
     try:
@@ -217,7 +212,6 @@ def handle_command(text):
 # =========================
 audio_q = queue.Queue()
 awake = False
-last_final_time = 0
 
 vosk_model = Model(VOSK_MODEL_PATH)
 recognizer = KaldiRecognizer(vosk_model, VOSK_SR)
@@ -239,19 +233,17 @@ def audio_callback(indata, frames, time_info, status):
 
 
 def process_audio():
-    global awake, last_final_time, LAST_INTERACTION_TIME
+    global awake
 
     while True:
         data = audio_q.get()
 
-        pcm48 = np.frombuffer(data, dtype=np.int16)
-        pcm16 = resample_poly(pcm48, 16000, 48000).astype(np.int16)
+        pcm = np.frombuffer(data, dtype=np.int16)
+        pcm16 = resample_poly(pcm, 16000, 48000).astype(np.int16)
 
         if recognizer.AcceptWaveform(pcm16.tobytes()):
             result = json.loads(recognizer.Result())
             text = result.get("text", "").strip()
-
-            now = time.time()
 
             if not text or len(text) < MIN_TEXT_LEN:
                 continue
@@ -259,15 +251,10 @@ def process_audio():
             if not awake:
                 if WAKE_WORD in text.lower():
                     awake = True
-                    LAST_INTERACTION_TIME = now
                     speak("Hello")
                 continue
 
-            LAST_INTERACTION_TIME = now
-
             handle_command(text)
-
-            # ALWAYS RETURN TO WAKE STATE AFTER RESPONSE
             awake = False
 
 # =========================
@@ -275,6 +262,8 @@ def process_audio():
 # =========================
 
 def cli_loop():
+    global awake
+
     while True:
         try:
             text = input("You: ").strip()
@@ -290,7 +279,18 @@ def cli_loop():
 # =========================
 
 def main():
+    global audio_stream
+
     print("[IRIS] Starting... Say 'iris' to wake.")
+
+    audio_stream = sd.OutputStream(
+        samplerate=PIPER_SR,
+        channels=1,
+        dtype="int16",
+        callback=audio_callback_out,
+        blocksize=1024
+    )
+    audio_stream.start()
 
     threading.Thread(target=process_audio, daemon=True).start()
 
