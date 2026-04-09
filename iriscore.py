@@ -5,6 +5,7 @@ import time
 import re
 import threading
 import sys
+import subprocess
 import numpy as np
 from scipy.signal import resample_poly
 import sounddevice as sd
@@ -18,8 +19,10 @@ from piper import PiperVoice
 try:
     from weather import get_weather_context, is_weather_question
     WEATHER_ENABLED = True
+    print("[IRIS] Weather features enabled")
 except ImportError:
     WEATHER_ENABLED = False
+    print("[WARNING] Weather module not found, weather features disabled")
 
 # =========================
 # NEWS INTEGRATION
@@ -27,13 +30,15 @@ except ImportError:
 try:
     from news import (
         handle_news_command,
-        is_news_question,
-        categorize_news_request,
-        get_news_context
+        handle_news_command_for_gemma,
+        is_news_question
     )
     NEWS_ENABLED = True
-except Exception:
+    print("[IRIS] News features enabled")
+except Exception as e:
     NEWS_ENABLED = False
+    print("[WARNING] News module not found or failed to load, news features disabled")
+    print("[NEWS ERROR] Exception during import:", repr(e))
 
 # =========================
 # CONFIG
@@ -41,92 +46,51 @@ except Exception:
 VOSK_MODEL_PATH = "models/vosk"
 WAKE_WORD = "iris"
 
-MIC_DEVICE_INDEX = None
+MIC_DEVICE_INDEX = "ZTD39 Device"
 MIC_SR = 48000
 VOSK_SR = 16000
 
-BLOCKSIZE = 4800
+BLOCKSIZE = 9600
 CHANNELS = 1
 DTYPE = "int16"
 
 PIPER_VOICE = "en_US-ryan-medium.onnx"
+APLAY_DEVICE = " USB2.0 Device"
 PIPER_SR = 22050
 
 MIN_TEXT_LEN = 3
-FINAL_COOLDOWN = 0.5
-CONVO_TIMEOUT = 10
+FINAL_COOLDOWN = 1.0
 
 # =========================
-# MEMORY
+# MUSIC FUNCTIONS
 # =========================
-conversation_history = []
-MAX_HISTORY = 8
-
-LAST_INTERACTION_TIME = 0
+def handle_music_command(text):
+    return False
 
 # =========================
-# VAD
+# INIT (SPEED FIX)
 # =========================
-INTERRUPT_VOLUME_THRESHOLD = 600
-VAD_SMOOTHING = 3
-vad_counter = 0
+voice = PiperVoice.load(PIPER_VOICE)  
+
+current_aplay_process = None  
 
 # =========================
-# AUDIO ENGINE (FIXED - BLOCKING STREAM WRITE)
+# TEXT / ACTION UTILS
 # =========================
-voice = PiperVoice.load(PIPER_VOICE)
-stop_speaking_flag = False
+ACTION_PATTERN = re.compile(r'\{action:\s*(\{.*?\})\s*\}', re.DOTALL)
 
+def extract_actions(text):
+    actions = []
 
-def stop_speaking():
-    global stop_speaking_flag
-    stop_speaking_flag = True
-
-
-def speak(text):
-    global stop_speaking_flag
-
-    stop_speaking_flag = False
-
-    try:
-        stream = sd.RawOutputStream(
-            samplerate=PIPER_SR,
-            channels=1,
-            dtype="int16",
-            blocksize=1024
-        )
-        stream.start()
-
-        for sentence in re.split(r'(?<=[.!?])\s+', text):
-            if stop_speaking_flag:
-                break
-
-            sentence = sentence.strip()
-            if not sentence:
-                continue
-
-            print("I.R.I.S.:", sentence)
-
-            for chunk in voice.synthesize(sentence):
-                if stop_speaking_flag:
-                    break
-
-                try:
-                    stream.write(chunk.audio_int16_bytes)
-                except Exception:
-                    stop_speaking_flag = True
-                    break
-
-    finally:
+    def repl(match):
         try:
-            stream.stop()
-            stream.close()
+            actions.append(json.loads(match.group(1)))
         except Exception:
-            pass
+            actions.append({"error": "invalid_action"})
+        return ""
 
-# =========================
-# TEXT UTILS
-# =========================
+    clean = ACTION_PATTERN.sub(repl, text)
+    return actions, clean.strip()
 
 def clean_for_tts(text):
     text = text.replace("*", "").replace(":", "")
@@ -134,144 +98,205 @@ def clean_for_tts(text):
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
+def split_sentences(text):
+    return [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
+
 # =========================
-# NEWS HANDLER
+# AUDIO OUTPUT (SAFE UPGRADED)
 # =========================
 
-def handle_news(text):
-    category = categorize_news_request(text)
-    news_text = get_news_context(text)
+def stop_audio():
+    """Safely stop current aplay if IRIS is interrupted"""
+    global current_aplay_process
+    if current_aplay_process and current_aplay_process.poll() is None:
+        try:
+            current_aplay_process.terminate()
+        except Exception:
+            pass
+    current_aplay_process = None
 
-    if category == "summary":
-        prompt = f"Summarize this news in 1–2 short spoken sentences:\n\n{news_text}"
-    else:
-        prompt = f"Convert this news into a short spoken briefing. Do not read formatting:\n\n{news_text}"
+
+def play_pcm(pcm_bytes):
+    """Single stable playback unit"""
+    global current_aplay_process
+
+    # ensure previous audio is not still blocking
+    stop_audio()
+
+    p = subprocess.Popen(
+        [
+            "aplay",
+            "-D", APLAY_DEVICE,
+            "-r", str(PIPER_SR),
+            "-f", "S16_LE",
+            "-c", "1",
+            "-t", "raw",
+            "--quiet"
+        ],
+        stdin=subprocess.PIPE
+    )
+
+    current_aplay_process = p
 
     try:
-        resp = ollama.generate(
-            model="iris",
-            prompt=prompt,
-            options={"keep_alive": -1}
-        )
-        speak(resp.get("response", ""))
+        p.stdin.write(pcm_bytes)
+        p.stdin.close()
+        p.wait()
     except Exception:
-        speak("News is currently unavailable.")
+        stop_audio()
+
+
+def speak(text):
+    """Fast + interrupt-safe speech"""
+    for sentence in split_sentences(text):
+        print("I.R.I.S.:", sentence)
+
+        # optional: allow interruption between sentences
+        for chunk in voice.synthesize(sentence):
+            play_pcm(chunk.audio_int16_bytes)
 
 # =========================
 # COMMAND HANDLER
 # =========================
 
 def handle_command(text):
-    global LAST_INTERACTION_TIME
-
     print("[IRIS] → Processing:", text)
 
-    if NEWS_ENABLED and is_news_question(text):
-        handle_news(text)
+    if handle_music_command(text):
         return
 
+    # NEWS
+    if NEWS_ENABLED and is_news_question(text):
+        raw_news = handle_news_command(text)
+
+        if raw_news and not raw_news.startswith("Sorry"):
+            print("[IRIS] → Sending news to Gemma for explanation")
+
+            prompt = f"""
+You are IRIS, a friendly home voice assistant.
+
+Here are today's news headlines:
+
+{raw_news}
+
+Please explain this news in a natural, conversational, and easy-to-understand way.
+Summarize clearly and avoid sounding robotic.
+"""
+
+            try:
+                print("[IRIS] → Routing to Gemma")
+                resp = ollama.generate(model="iris", prompt=prompt)
+                raw = resp.get("response", "")
+            except Exception as e:
+                print("[IRIS ERROR] Ollama failed:", e)
+                speak(raw_news)
+                return
+
+            actions, cleaned = extract_actions(raw)
+            tts_text = clean_for_tts(cleaned)
+
+            if tts_text:
+                speak(tts_text)
+            return
+
+    # WEATHER
     prompt = text
-
     if WEATHER_ENABLED and is_weather_question(text):
-        try:
-            prompt = f"Context: {get_weather_context()}\nUser: {text}"
-        except Exception:
-            pass
-
-    conversation_history.append({"role": "user", "content": prompt})
-    conversation_history[:] = conversation_history[-MAX_HISTORY:]
+        weather_context = get_weather_context()
+        prompt = f"Context: {weather_context}\n\nQuestion: {text}\nPlease provide a helpful, conversational response about the weather."
 
     try:
-        resp = ollama.chat(
-            model="iris",
-            messages=conversation_history,
-            options={"keep_alive": -1}
-        )
-    except Exception:
-        speak("Sorry, I had trouble responding.")
+        resp = ollama.generate(model="iris", prompt=prompt)
+    except Exception as e:
+        print("[IRIS ERROR] Ollama failed:", e)
         return
 
-    reply = resp.get("message", {}).get("content", "")
+    raw = resp.get("response", "")
+    actions, cleaned = extract_actions(raw)
 
-    conversation_history.append({"role": "assistant", "content": reply})
-
-    tts_text = clean_for_tts(reply)
+    tts_text = clean_for_tts(cleaned)
     if tts_text:
         speak(tts_text)
 
+    if actions:
+        print("[IRIS actions]")
+        print(json.dumps(actions, indent=2))
+
 # =========================
-# AUDIO INPUT
+# AUDIO PROCESSING (UNCHANGED CORE)
 # =========================
+
 audio_q = queue.Queue()
 awake = False
+last_final_time = 0
 
 vosk_model = Model(VOSK_MODEL_PATH)
 recognizer = KaldiRecognizer(vosk_model, VOSK_SR)
 recognizer.SetWords(True)
 
-
 def audio_callback(indata, frames, time_info, status):
-    global vad_counter, awake
-
-    audio_np = np.frombuffer(indata, dtype=np.int16)
-    volume = np.mean(np.abs(audio_np))
-
-    vad_counter = vad_counter + 1 if volume > INTERRUPT_VOLUME_THRESHOLD else 0
-
-    if awake and vad_counter >= VAD_SMOOTHING:
-        stop_speaking()
-
+    if status:
+        print("[sd status]", status, file=sys.stderr)
     audio_q.put(bytes(indata))
 
-
 def process_audio():
-    global awake
+    global awake, last_final_time
 
     while True:
         data = audio_q.get()
 
-        pcm = np.frombuffer(data, dtype=np.int16)
-        pcm16 = resample_poly(pcm, 16000, 48000).astype(np.int16)
+        pcm48 = np.frombuffer(data, dtype=np.int16)
+        pcm16 = resample_poly(pcm48, 1, 3).astype(np.int16)
 
         if recognizer.AcceptWaveform(pcm16.tobytes()):
             result = json.loads(recognizer.Result())
             text = result.get("text", "").strip()
 
-            if not text or len(text) < MIN_TEXT_LEN:
+            now = time.time()
+
+            if (
+                not text
+                or len(text) < MIN_TEXT_LEN
+                or text in ("the", "uh", "um", "by", "that")
+                or now - last_final_time < FINAL_COOLDOWN
+            ):
                 continue
 
+            last_final_time = now
+            print("[VOSK final]:", text)
+
             if not awake:
-                if WAKE_WORD in text.lower():
+                if WAKE_WORD in text:
                     awake = True
-                    speak("Hello")
+                    speak("Hello!")
                 continue
 
             handle_command(text)
             awake = False
 
 # =========================
-# CLI
+# CLI LOOP
 # =========================
 
 def cli_loop():
-    global awake
-
     while True:
         try:
-            text = input("You: ").strip()
+            text = input("You (text): ").strip()
         except (EOFError, KeyboardInterrupt):
+            print("\n[IRIS] Exiting cleanly.")
             sys.exit(0)
 
         if text:
             handle_command(text)
-            awake = False
 
 # =========================
 # MAIN
 # =========================
 
 def main():
-    print("[IRIS] Starting... Say 'iris' to wake.")
+    print("[IRIS] Initializing...")
+    print("[IRIS] Listening... Say 'iris'")
+    print("Type text commands anytime.\n")
 
     threading.Thread(target=process_audio, daemon=True).start()
 
@@ -284,7 +309,6 @@ def main():
         callback=audio_callback
     ):
         cli_loop()
-
 
 if __name__ == "__main__":
     main()
