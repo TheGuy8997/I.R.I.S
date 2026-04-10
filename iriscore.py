@@ -41,6 +41,13 @@ except Exception as e:
     print("[NEWS ERROR] Exception during import:", repr(e))
 
 # =========================
+# MUSIC INTEGRATION (NEW)
+# =========================
+import music
+
+MUSIC_PLAYER_ID = "ma_7r40h6sc1k"
+
+# =========================
 # CONFIG
 # =========================
 VOSK_MODEL_PATH = "models/vosk"
@@ -55,14 +62,14 @@ CHANNELS = 1
 DTYPE = "int16"
 
 PIPER_VOICE = "en_US-ryan-medium.onnx"
-APLAY_DEVICE = " USB2.0 Device"
+APLAY_DEVICE = "plughw:CARD=Device,DEV=0"
 PIPER_SR = 22050
 
 MIN_TEXT_LEN = 3
 FINAL_COOLDOWN = 1.0
 
 # =========================
-# CONVERSATION CALLBACKS (NEW - MINIMAL ADDITION)
+# CONVERSATION CALLBACKS
 # =========================
 conversation_callbacks = []
 
@@ -75,12 +82,6 @@ def run_conversation_callbacks(role, text):
             cb(role, text)
         except Exception as e:
             print("[IRIS callback error]", e)
-
-# =========================
-# MUSIC FUNCTIONS
-# =========================
-def handle_music_command(text):
-    return False
 
 # =========================
 # TEXT / ACTION UTILS
@@ -112,7 +113,6 @@ def split_sentences(text):
 # =========================
 # AUDIO OUTPUT
 # =========================
-
 def play_pcm(pcm_bytes):
     p = subprocess.Popen(
         [
@@ -130,7 +130,6 @@ def play_pcm(pcm_bytes):
     p.stdin.close()
     p.wait()
 
-
 def speak(text):
     for sentence in split_sentences(text):
         print("I.R.I.S.:", sentence)
@@ -139,75 +138,161 @@ def speak(text):
             play_pcm(chunk.audio_int16_bytes)
 
 # =========================
+# MUSIC HANDLER (NEW)
+# =========================
+def extract_music_intent(text: str):
+    text = text.lower()
+
+    if "stop music" in text or text.strip() == "stop":
+        return "stop"
+    if "pause" in text:
+        return "pause"
+    if "resume" in text or "start music" in text:
+        return "resume"
+    if "next" in text or "skip" in text:
+        return "next"
+    if "previous" in text or "back" in text:
+        return "previous"
+    if "play" in text:
+        return "play"
+
+    return None
+
+def handle_music_command(text):
+    intent = extract_music_intent(text)
+    if not intent:
+        return False
+
+    # PLAY
+    if intent == "play":
+        query = text.lower().replace("play", "").strip()
+        if not query:
+            query = "music"
+
+        results = music.search_track(query)
+
+        if not results:
+            speak("I couldn't find that music.")
+            return True
+
+        track = results[0]
+
+        try:
+            music.play_uri(track["uri"])
+            speak(f"Playing {track['name']}")
+        except Exception as e:
+            print("[MUSIC ERROR]", e)
+            speak("Music failed to play.")
+        return True
+
+    # STOP
+    if intent == "stop":
+        try:
+            music.stop()
+            speak("Music stopped")
+        except Exception as e:
+            print("[MUSIC ERROR]", e)
+        return True
+
+    # PAUSE
+    if intent == "pause":
+        try:
+            music.pause()
+            speak("Paused")
+        except Exception as e:
+            print("[MUSIC ERROR]", e)
+        return True
+
+    # RESUME
+    if intent == "resume":
+        try:
+            music.resume()
+            speak("Resuming music")
+        except Exception as e:
+            print("[MUSIC ERROR]", e)
+        return True
+
+    # NEXT
+    if intent == "next":
+        try:
+            music.next_track()
+        except Exception as e:
+            print("[MUSIC ERROR]", e)
+        return True
+
+    # PREVIOUS
+    if intent == "previous":
+        try:
+            music.previous()
+        except Exception as e:
+            print("[MUSIC ERROR]", e)
+        return True
+
+    return False
+
+# =========================
 # COMMAND HANDLER
 # =========================
-
 def handle_command(text):
     print("[IRIS] → Processing:", text)
-    run_conversation_callbacks("user", text)  # NEW
+    run_conversation_callbacks("user", text)
 
+    # MUSIC FIRST (IMPORTANT)
     if handle_music_command(text):
         return
 
+    # NEWS
     if NEWS_ENABLED and is_news_question(text):
         raw_news = handle_news_command(text)
 
         if raw_news and not raw_news.startswith("Sorry"):
             prompt = f"""
-You are IRIS, a friendly home voice assistant.
+You are IRIS.
 
-Here are today's news headlines:
-
+Here are news headlines:
 {raw_news}
 
-Please explain this news in a natural, conversational, and easy-to-understand way.
+Explain simply and conversationally.
 """
             try:
                 resp = ollama.generate(model="iris", prompt=prompt)
                 raw = resp.get("response", "")
-            except Exception as e:
+            except Exception:
                 speak(raw_news)
                 return
 
-            actions, cleaned = extract_actions(raw)
-            tts_text = clean_for_tts(cleaned)
+            tts_text = clean_for_tts(raw)
 
             if tts_text:
                 speak(tts_text)
-                run_conversation_callbacks("assistant", tts_text)  # NEW
+                run_conversation_callbacks("assistant", tts_text)
             return
 
+    # WEATHER / NORMAL LLM
     prompt = text
 
     if WEATHER_ENABLED and is_weather_question(text):
         try:
             prompt = f"Context: {get_weather_context()}\n\nQuestion: {text}"
-        except Exception:
+        except:
             pass
 
     try:
-        resp = ollama.generate(
-            model="iris",
-            prompt=prompt,
-            options={"keep_alive": -1}
-        )
-    except Exception:
+        resp = ollama.generate(model="iris", prompt=prompt)
+    except:
         speak("Sorry, I had trouble responding.")
         return
 
     raw = resp.get("response", "")
-
-    actions, cleaned = extract_actions(raw)
-    tts_text = clean_for_tts(cleaned)
+    tts_text = clean_for_tts(raw)
 
     if tts_text:
         speak(tts_text)
-        run_conversation_callbacks("assistant", tts_text)  # NEW
+        run_conversation_callbacks("assistant", tts_text)
 
 # =========================
 # AUDIO PROCESSING
 # =========================
-
 audio_q = queue.Queue()
 awake = False
 last_final_time = 0
@@ -239,7 +324,6 @@ def process_audio():
             if (
                 not text
                 or len(text) < MIN_TEXT_LEN
-                or text in ("the", "uh", "um", "by", "that")
                 or now - last_final_time < FINAL_COOLDOWN
             ):
                 continue
@@ -257,28 +341,11 @@ def process_audio():
             awake = False
 
 # =========================
-# CLI LOOP
-# =========================
-
-def cli_loop():
-    while True:
-        try:
-            text = input("You (text): ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\n[IRIS] Exiting cleanly.")
-            sys.exit(0)
-
-        if text:
-            handle_command(text)
-
-# =========================
 # MAIN
 # =========================
-
 def main():
     print("[IRIS] Initializing...")
     print("[IRIS] Listening... Say 'iris'")
-    print("Type text commands anytime.\n")
 
     threading.Thread(target=process_audio, daemon=True).start()
 
@@ -290,7 +357,8 @@ def main():
         channels=CHANNELS,
         callback=audio_callback
     ):
-        cli_loop()
+        while True:
+            time.sleep(0.1)
 
 if __name__ == "__main__":
     main()
