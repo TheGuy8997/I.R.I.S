@@ -43,7 +43,14 @@ except Exception as e:
 # =========================
 # MUSIC INTEGRATION (NEW)
 # =========================
-import music
+try:
+    import music
+    MUSIC_ENABLED = True
+    print("[IRIS] Music features enabled")
+except Exception as e:
+    MUSIC_ENABLED = False
+    print("[WARNING] Music module not found or failed to load, music features disabled")
+    print("[MUSIC ERROR]", repr(e))
 
 MUSIC_PLAYER_ID = "ma_7r40h6sc1k"
 
@@ -138,8 +145,9 @@ def speak(text):
             play_pcm(chunk.audio_int16_bytes)
 
 # =========================
-# MUSIC HANDLER (NEW)
+# MUSIC HANDLER (UPDATED FOR NEW music.py)
 # =========================
+
 def extract_music_intent(text: str):
     text = text.lower()
 
@@ -158,18 +166,22 @@ def extract_music_intent(text: str):
 
     return None
 
+
 def handle_music_command(text):
     intent = extract_music_intent(text)
     if not intent:
         return False
 
-    # PLAY
+    # =========================
+    # PLAY (SEARCH → PLAY MEDIA)
+    # =========================
     if intent == "play":
         query = text.lower().replace("play", "").strip()
+
         if not query:
             query = "music"
 
-        results = music.search_track(query)
+        results = music.search_music(query)
 
         if not results:
             speak("I couldn't find that music.")
@@ -178,14 +190,17 @@ def handle_music_command(text):
         track = results[0]
 
         try:
-            music.play_uri(track["uri"])
+            music.play_media(track["uri"])   # 🔥 UPDATED (NOT play_uri)
             speak(f"Playing {track['name']}")
         except Exception as e:
             print("[MUSIC ERROR]", e)
             speak("Music failed to play.")
+
         return True
 
+    # =========================
     # STOP
+    # =========================
     if intent == "stop":
         try:
             music.stop()
@@ -194,7 +209,9 @@ def handle_music_command(text):
             print("[MUSIC ERROR]", e)
         return True
 
+    # =========================
     # PAUSE
+    # =========================
     if intent == "pause":
         try:
             music.pause()
@@ -203,7 +220,9 @@ def handle_music_command(text):
             print("[MUSIC ERROR]", e)
         return True
 
+    # =========================
     # RESUME
+    # =========================
     if intent == "resume":
         try:
             music.resume()
@@ -212,7 +231,9 @@ def handle_music_command(text):
             print("[MUSIC ERROR]", e)
         return True
 
+    # =========================
     # NEXT
+    # =========================
     if intent == "next":
         try:
             music.next_track()
@@ -220,10 +241,12 @@ def handle_music_command(text):
             print("[MUSIC ERROR]", e)
         return True
 
+    # =========================
     # PREVIOUS
+    # =========================
     if intent == "previous":
         try:
-            music.previous()
+            music.previous_track()
         except Exception as e:
             print("[MUSIC ERROR]", e)
         return True

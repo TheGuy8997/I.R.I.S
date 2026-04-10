@@ -1,12 +1,13 @@
 import requests
-import json
 
 # =========================
-# CONFIGURATION
+# CONFIG
 # =========================
 
-MA_API = "http://localhost:8095/api"
-TOKEN = "rNcJ2T9xqubO9UJ1PqnAPaspxHHRwwflmwOAk2LPYXvnIdMGcCGeXGZZkDOBCmih"
+MA_URL = "http://localhost:8095/api"
+TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI3aUg4SkFvV2xETlZTNHUzVWY0SHVDSFA4N2ZOcUFwYVZEWFRlSlZqdjRjIiwianRpIjoiLXBobThvTmlUallWQ1FDbmdXNGV5WXkzZ1Q1bnB6eGM4MGlaYkZNU1lzayIsImlhdCI6MTc3NTc4MjM5NiwiZXhwIjoyMDkxMTQyMzk2LCJ1c2VybmFtZSI6ImlyaXMiLCJyb2xlIjoiYWRtaW4iLCJ0b2tlbl9uYW1lIjoiaXJpcyIsImlzX2xvbmdfbGl2ZWQiOnRydWV9.6z6ji89E4ex3pSVwqH_o7UvzsCkONjxRMX-MV2nMeiw"
+
+PLAYER_ID = "ma_7r40h6sc1k"
 
 HEADERS = {
     "Authorization": f"Bearer {TOKEN}",
@@ -14,100 +15,87 @@ HEADERS = {
 }
 
 # =========================
-# CORE REQUEST HELPER
+# CORE REQUEST
 # =========================
 
-def ma_request(command, args=None):
-    """Safe wrapper for Music Assistant API calls."""
+def ma_request(command, args):
     payload = {
+        "message_id": "1",
         "command": command,
-        "args": args or {}
+        "args": args
     }
 
+    r = requests.post(MA_URL, json=payload, headers=HEADERS, timeout=10)
+
     try:
-        resp = requests.post(MA_API, headers=HEADERS, json=payload, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
-    except requests.exceptions.RequestException as e:
-        print(f"[MUSIC ERROR] {e}")
+        return r.json()
+    except Exception:
+        print("[MA ERROR]", r.text)
         return None
 
-# =========================
-# BASIC PLAYBACK
-# =========================
-
-def play_uri(uri):
-    """Play a URI using the active Music Assistant queue."""
-    print(f"[PLAY] {uri}")
-
-    return ma_request("player_queues/play", {
-        "uri": uri
-    })
-
-
-def pause():
-    return ma_request("player/play_pause", {
-        "state": "pause"
-    })
-
-
-def resume():
-    return ma_request("player/play_pause", {
-        "state": "play"
-    })
-
-
-def skip():
-    return ma_request("player_queues/next", {})
 
 # =========================
 # SEARCH
 # =========================
 
-def search_track(query, limit=5):
-    data = ma_request("music/search", {
-        "search_query": query
+def search_music(query, limit=5):
+    res = ma_request("music/search", {
+        "search_query": query,
+        "limit": limit
     })
 
-    if not data:
+    if not res:
         return []
 
-    result = data.get("result", {})
-    tracks = []
+    items = []
+    for section in ["tracks", "artists", "albums"]:
+        for i in res.get(section, []):
+            items.append({
+                "name": i.get("name"),
+                "artist": ", ".join([a["name"] for a in i.get("artists", [])]) if i.get("artists") else "",
+                "uri": i.get("uri"),
+                "provider": i.get("provider")
+            })
 
-    for item in result.get("tracks", []):
-        tracks.append({
-            "name": item.get("name"),
-            "artist": ", ".join([a["name"] for a in item.get("artists", [])]),
-            "uri": item.get("uri")
-        })
+    return items
 
-    return tracks[:limit]
 
 # =========================
-# STREAM INTELLIGENCE LAYER
+# PLAYBACK
 # =========================
 
-def inspect_track(track):
-    return {
-        "name": track.get("name"),
-        "uri": track.get("uri"),
-        "ready": track.get("uri") is not None
-    }
+def play_media(uri):
+    return ma_request("player_queues/play_media", {
+        "queue_id": PLAYER_ID,
+        "media": uri
+    })
 
 
-def play_track(query):
-    tracks = search_track(query)
-
-    if not tracks:
-        print("[MUSIC] No results")
-        return None
-
-    track = tracks[0]
-    print("[MUSIC] Selected:", inspect_track(track))
-
-    return play_uri(track["uri"])
+def stop():
+    return ma_request("player_queues/stop", {
+        "queue_id": PLAYER_ID
+    })
 
 
-def play_track_async(query):
-    return play_track(query)
+def pause():
+    return ma_request("player_queues/pause", {
+        "queue_id": PLAYER_ID
+    })
+
+
+def resume():
+    return ma_request("player_queues/resume", {
+        "queue_id": PLAYER_ID
+    })
+
+
+def next_track():
+    return ma_request("player_queues/next", {
+        "queue_id": PLAYER_ID
+    })
+
+
+def previous_track():
+    return ma_request("player_queues/previous", {
+        "queue_id": PLAYER_ID
+    })
