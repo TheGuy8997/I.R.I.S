@@ -62,17 +62,25 @@ MIN_TEXT_LEN = 3
 FINAL_COOLDOWN = 1.0
 
 # =========================
+# CONVERSATION CALLBACKS (NEW - MINIMAL ADDITION)
+# =========================
+conversation_callbacks = []
+
+def register_conversation_callback(func):
+    conversation_callbacks.append(func)
+
+def run_conversation_callbacks(role, text):
+    for cb in conversation_callbacks:
+        try:
+            cb(role, text)
+        except Exception as e:
+            print("[IRIS callback error]", e)
+
+# =========================
 # MUSIC FUNCTIONS
 # =========================
 def handle_music_command(text):
     return False
-
-# =========================
-# INIT (SPEED FIX)
-# =========================
-voice = PiperVoice.load(PIPER_VOICE)  
-
-current_aplay_process = None  
 
 # =========================
 # TEXT / ACTION UTILS
@@ -102,27 +110,10 @@ def split_sentences(text):
     return [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
 
 # =========================
-# AUDIO OUTPUT (SAFE UPGRADED)
+# AUDIO OUTPUT
 # =========================
 
-def stop_audio():
-    """Safely stop current aplay if IRIS is interrupted"""
-    global current_aplay_process
-    if current_aplay_process and current_aplay_process.poll() is None:
-        try:
-            current_aplay_process.terminate()
-        except Exception:
-            pass
-    current_aplay_process = None
-
-
 def play_pcm(pcm_bytes):
-    """Single stable playback unit"""
-    global current_aplay_process
-
-    # ensure previous audio is not still blocking
-    stop_audio()
-
     p = subprocess.Popen(
         [
             "aplay",
@@ -135,23 +126,15 @@ def play_pcm(pcm_bytes):
         ],
         stdin=subprocess.PIPE
     )
-
-    current_aplay_process = p
-
-    try:
-        p.stdin.write(pcm_bytes)
-        p.stdin.close()
-        p.wait()
-    except Exception:
-        stop_audio()
+    p.stdin.write(pcm_bytes)
+    p.stdin.close()
+    p.wait()
 
 
 def speak(text):
-    """Fast + interrupt-safe speech"""
     for sentence in split_sentences(text):
         print("I.R.I.S.:", sentence)
-
-        # optional: allow interruption between sentences
+        voice = PiperVoice.load(PIPER_VOICE)
         for chunk in voice.synthesize(sentence):
             play_pcm(chunk.audio_int16_bytes)
 
@@ -161,17 +144,15 @@ def speak(text):
 
 def handle_command(text):
     print("[IRIS] → Processing:", text)
+    run_conversation_callbacks("user", text)  # NEW
 
     if handle_music_command(text):
         return
 
-    # NEWS
     if NEWS_ENABLED and is_news_question(text):
         raw_news = handle_news_command(text)
 
         if raw_news and not raw_news.startswith("Sorry"):
-            print("[IRIS] → Sending news to Gemma for explanation")
-
             prompt = f"""
 You are IRIS, a friendly home voice assistant.
 
@@ -180,15 +161,11 @@ Here are today's news headlines:
 {raw_news}
 
 Please explain this news in a natural, conversational, and easy-to-understand way.
-Summarize clearly and avoid sounding robotic.
 """
-
             try:
-                print("[IRIS] → Routing to Gemma")
                 resp = ollama.generate(model="iris", prompt=prompt)
                 raw = resp.get("response", "")
             except Exception as e:
-                print("[IRIS ERROR] Ollama failed:", e)
                 speak(raw_news)
                 return
 
@@ -197,33 +174,38 @@ Summarize clearly and avoid sounding robotic.
 
             if tts_text:
                 speak(tts_text)
+                run_conversation_callbacks("assistant", tts_text)  # NEW
             return
 
-    # WEATHER
     prompt = text
+
     if WEATHER_ENABLED and is_weather_question(text):
-        weather_context = get_weather_context()
-        prompt = f"Context: {weather_context}\n\nQuestion: {text}\nPlease provide a helpful, conversational response about the weather."
+        try:
+            prompt = f"Context: {get_weather_context()}\n\nQuestion: {text}"
+        except Exception:
+            pass
 
     try:
-        resp = ollama.generate(model="iris", prompt=prompt)
-    except Exception as e:
-        print("[IRIS ERROR] Ollama failed:", e)
+        resp = ollama.generate(
+            model="iris",
+            prompt=prompt,
+            options={"keep_alive": -1}
+        )
+    except Exception:
+        speak("Sorry, I had trouble responding.")
         return
 
     raw = resp.get("response", "")
-    actions, cleaned = extract_actions(raw)
 
+    actions, cleaned = extract_actions(raw)
     tts_text = clean_for_tts(cleaned)
+
     if tts_text:
         speak(tts_text)
-
-    if actions:
-        print("[IRIS actions]")
-        print(json.dumps(actions, indent=2))
+        run_conversation_callbacks("assistant", tts_text)  # NEW
 
 # =========================
-# AUDIO PROCESSING (UNCHANGED CORE)
+# AUDIO PROCESSING
 # =========================
 
 audio_q = queue.Queue()
