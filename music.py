@@ -13,8 +13,6 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-QUEUE_ID = "ma_ghhsuopngx"
-
 # =========================
 # CORE REQUEST HELPER
 # =========================
@@ -39,32 +37,28 @@ def ma_request(command, args=None):
 # =========================
 
 def play_uri(uri):
-    """Play a URI directly via Music Assistant queue."""
+    """Play a URI using the active Music Assistant queue."""
     print(f"[PLAY] {uri}")
+
     return ma_request("player_queues/play", {
-        "queue_id": QUEUE_ID,
         "uri": uri
     })
 
 
 def pause():
     return ma_request("player/play_pause", {
-        "queue_id": QUEUE_ID,
         "state": "pause"
     })
 
 
 def resume():
     return ma_request("player/play_pause", {
-        "queue_id": QUEUE_ID,
         "state": "play"
     })
 
 
 def skip():
-    return ma_request("player_queues/next", {
-        "queue_id": QUEUE_ID
-    })
+    return ma_request("player_queues/next", {})
 
 # =========================
 # SEARCH
@@ -91,11 +85,10 @@ def search_track(query, limit=5):
     return tracks[:limit]
 
 # =========================
-# STREAM INTELLIGENCE LAYER (NEW)
+# STREAM INTELLIGENCE LAYER
 # =========================
 
 def inspect_track(track):
-    """Lightweight metadata inspector."""
     return {
         "name": track.get("name"),
         "uri": track.get("uri"),
@@ -104,7 +97,6 @@ def inspect_track(track):
 
 
 def play_track(query):
-    """Search and play best match."""
     tracks = search_track(query)
 
     if not tracks:
@@ -118,20 +110,4 @@ def play_track(query):
 
 
 def play_track_async(query):
-    """Future-safe async-style wrapper (non-blocking placeholder)."""
     return play_track(query)
-
-# =========================
-# QUEUE / STATUS
-# =========================
-
-def get_queue():
-    return ma_request("player_queues/items", {
-        "queue_id": QUEUE_ID
-    })
-
-
-def get_status():
-    return ma_request("player/state", {
-        "queue_id": QUEUE_ID
-    })
