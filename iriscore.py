@@ -145,7 +145,7 @@ def speak(text):
             play_pcm(chunk.audio_int16_bytes)
 
 # =========================
-# MUSIC HANDLER (UPDATED FOR NEW music.py)
+# MUSIC HANDLER
 # =========================
 
 def extract_music_intent(text: str):
@@ -173,7 +173,7 @@ def handle_music_command(text):
         return False
 
     # =========================
-    # PLAY (SEARCH → PLAY MEDIA)
+    # PLAY
     # =========================
     if intent == "play":
         query = text.lower().replace("play", "").strip()
@@ -190,7 +190,7 @@ def handle_music_command(text):
         track = results[0]
 
         try:
-            music.play_media(track["uri"])   # 🔥 UPDATED (NOT play_uri)
+            music.play_media(track["uri"])  
             speak(f"Playing {track['name']}")
         except Exception as e:
             print("[MUSIC ERROR]", e)

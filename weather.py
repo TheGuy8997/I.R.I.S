@@ -210,3 +210,4 @@ def handle_weather_command(text):
         return f"The current weather in {summary['location']} is {summary['weather']} with a temperature of {summary['temperature']}°Fahrenheit, wind speed of {summary['wind_speed']} miles per hour, and humidity at {summary['humidity']}%."
     
     return None
+
