@@ -41,14 +41,17 @@ Download: https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_US
 
 File: `en_US-ryan-medium.onnx`
 
+And don't forget the json: `en_US-ryan-medium.onnx.json`
+
 Place in root:
 ```
 iris/en_US-ryan-medium.onnx
+iris/en_US-ryan-medium.onnx.json
 ```
 
 ## 6. Setup Ollama model
 ```bash
-ollama pull gemma2:2b
+ollama pull gemma3:1b
 ollama create iris -f modelfile
 ```
 
