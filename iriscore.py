@@ -41,7 +41,7 @@ except Exception as e:
     print("[NEWS ERROR] Exception during import:", repr(e))
 
 # =========================
-# MUSIC INTEGRATION (NEW)
+# MUSIC INTEGRATION 
 # =========================
 try:
     import music
