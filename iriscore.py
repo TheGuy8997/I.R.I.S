@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import queue
 import json
+import os
 import time
 import re
 import threading
@@ -52,25 +53,26 @@ except Exception as e:
     print("[WARNING] Music module not found or failed to load, music features disabled")
     print("[MUSIC ERROR]", repr(e))
 
-MUSIC_PLAYER_ID = "ma_7r40h6sc1k"
-
 # =========================
 # CONFIG
 # =========================
-VOSK_MODEL_PATH = "models/vosk"
-WAKE_WORD = "iris"
+VOSK_MODEL_PATH = os.getenv("IRIS_VOSK_MODEL_PATH", "models/vosk")
+WAKE_WORD = os.getenv("IRIS_WAKE_WORD", "iris").strip().lower()
 
-MIC_DEVICE_INDEX = "ZTD39 Device"
-MIC_SR = 48000
+MIC_DEVICE_INDEX = os.getenv("IRIS_MIC_DEVICE", "ZTD39 Device")
+MIC_SR = int(os.getenv("IRIS_MIC_SAMPLE_RATE", "48000"))
 VOSK_SR = 16000
 
-BLOCKSIZE = 9600
+BLOCKSIZE = int(os.getenv("IRIS_AUDIO_BLOCKSIZE", "9600"))
 CHANNELS = 1
 DTYPE = "int16"
+WAKE_GRAMMAR = json.dumps([WAKE_WORD, "[unk]"])
 
-PIPER_VOICE = "en_US-ryan-medium.onnx"
-APLAY_DEVICE = "plughw:CARD=Device,DEV=0"
-PIPER_SR = 22050
+PIPER_VOICE = os.getenv("IRIS_PIPER_VOICE", "en_US-ryan-medium.onnx")
+APLAY_DEVICE = os.getenv("IRIS_ALSA_DEVICE", "plughw:CARD=Device,DEV=0")
+PIPER_SR = int(os.getenv("IRIS_PIPER_SAMPLE_RATE", "22050"))
+OLLAMA_MODEL = os.getenv("IRIS_OLLAMA_MODEL", "iris")
+OLLAMA_KEEP_ALIVE = os.getenv("IRIS_OLLAMA_KEEP_ALIVE", "10m")
 
 MIN_TEXT_LEN = 3
 FINAL_COOLDOWN = 1.0
@@ -79,6 +81,10 @@ FINAL_COOLDOWN = 1.0
 # CONVERSATION CALLBACKS
 # =========================
 conversation_callbacks = []
+piper_voice = None
+conversation_history = []
+MAX_HISTORY_TURNS = 3
+MAX_HISTORY_TEXT = 600
 
 def register_conversation_callback(func):
     conversation_callbacks.append(func)
@@ -89,6 +95,29 @@ def run_conversation_callbacks(role, text):
             cb(role, text)
         except Exception as e:
             print("[IRIS callback error]", e)
+
+def remember_turn(user_text, assistant_text):
+    conversation_history.append((
+        user_text[-MAX_HISTORY_TEXT:],
+        assistant_text[-MAX_HISTORY_TEXT:],
+    ))
+    del conversation_history[:-MAX_HISTORY_TURNS]
+
+def add_conversation_context(prompt):
+    if not conversation_history:
+        return prompt
+
+    history = ["Recent conversation, for understanding follow-up questions:"]
+    for user_text, assistant_text in conversation_history:
+        history.append(f"User: {user_text}")
+        history.append(f"IRIS: {assistant_text}")
+    history.append(f"Current request: {prompt}")
+    return "\n".join(history)
+
+def respond_to_turn(user_text, assistant_text):
+    remember_turn(user_text, assistant_text)
+    speak(assistant_text)
+    run_conversation_callbacks("assistant", assistant_text)
 
 # =========================
 # TEXT / ACTION UTILS
@@ -138,120 +167,82 @@ def play_pcm(pcm_bytes):
     p.wait()
 
 def speak(text):
+    global piper_voice
+
+    if piper_voice is None:
+        piper_voice = PiperVoice.load(PIPER_VOICE)
+
     for sentence in split_sentences(text):
         print("I.R.I.S.:", sentence)
-        voice = PiperVoice.load(PIPER_VOICE)
-        for chunk in voice.synthesize(sentence):
-            play_pcm(chunk.audio_int16_bytes)
+        pcm_bytes = b"".join(
+            chunk.audio_int16_bytes for chunk in piper_voice.synthesize(sentence)
+        )
+        if pcm_bytes:
+            play_pcm(pcm_bytes)
 
 # =========================
 # MUSIC HANDLER
 # =========================
 
 def extract_music_intent(text: str):
-    text = text.lower()
+    normalized = re.sub(r"[^\w\s']", " ", text.lower())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
 
-    if "stop music" in text or text.strip() == "stop":
-        return "stop"
-    if "pause" in text:
-        return "pause"
-    if "resume" in text or "start music" in text:
-        return "resume"
-    if "next" in text or "skip" in text:
-        return "next"
-    if "previous" in text or "back" in text:
-        return "previous"
-    if "play" in text:
-        return "play"
+    commands = (
+        ("stop", r"^(?:stop|stop music|stop playing)(?:\s+music)?$"),
+        ("pause", r"^(?:pause|pause music|hold on)(?:\s+the music)?$"),
+        ("resume", r"^(?:resume|resume music|continue|unpause)(?:\s+music)?$"),
+        ("next", r"^(?:next|next track|skip|skip this)(?:\s+(?:track|song|this track|this song))?$"),
+        ("previous", r"^(?:previous|previous track|back|go back)(?:\s+(?:track|song))?$"),
+    )
+    for intent, pattern in commands:
+        if re.fullmatch(pattern, normalized):
+            return intent, ""
 
-    return None
+    play_match = re.match(
+        r"^(?:(?:please|can you|could you|would you)\s+)*(?:play|put on|queue|listen to)\b",
+        normalized,
+    )
+    if play_match:
+        query = normalized[play_match.end():].strip()
+        query = re.sub(r"^(?:some|the)\s+", "", query)
+        return "play", query
+
+    return None, ""
 
 
 def handle_music_command(text):
-    intent = extract_music_intent(text)
+    intent, query = extract_music_intent(text)
     if not intent:
-        return False
+        return None
 
-    # =========================
-    # PLAY
-    # =========================
-    if intent == "play":
-        query = text.lower().replace("play", "").strip()
-
-        if not query:
-            query = "music"
-
-        results = music.search_music(query)
-
-        if not results:
-            speak("I couldn't find that music.")
-            return True
-
-        track = results[0]
-
-        try:
-            music.play_media(track["uri"])  
-            speak(f"Playing {track['name']}")
-        except Exception as e:
-            print("[MUSIC ERROR]", e)
-            speak("Music failed to play.")
-
-        return True
-
-    # =========================
-    # STOP
-    # =========================
-    if intent == "stop":
-        try:
-            music.stop()
-            speak("Music stopped")
-        except Exception as e:
-            print("[MUSIC ERROR]", e)
-        return True
-
-    # =========================
-    # PAUSE
-    # =========================
-    if intent == "pause":
-        try:
-            music.pause()
-            speak("Paused")
-        except Exception as e:
-            print("[MUSIC ERROR]", e)
-        return True
-
-    # =========================
-    # RESUME
-    # =========================
-    if intent == "resume":
-        try:
-            music.resume()
-            speak("Resuming music")
-        except Exception as e:
-            print("[MUSIC ERROR]", e)
-        return True
-
-    # =========================
-    # NEXT
-    # =========================
-    if intent == "next":
-        try:
-            music.next_track()
-        except Exception as e:
-            print("[MUSIC ERROR]", e)
-        return True
-
-    # =========================
-    # PREVIOUS
-    # =========================
-    if intent == "previous":
-        try:
-            music.previous_track()
-        except Exception as e:
-            print("[MUSIC ERROR]", e)
-        return True
-
-    return False
+    try:
+        if intent == "play":
+            selected = music.play_query(query)
+            if selected is None:
+                return f"I couldn't find {query or 'music'}."
+            else:
+                title = selected["name"]
+                artist = selected.get("artist")
+                return f"Playing {title}" + (f" by {artist}" if artist else "")
+        else:
+            getattr(music, {
+                "stop": "stop",
+                "pause": "pause",
+                "resume": "resume",
+                "next": "next_track",
+                "previous": "previous_track",
+            }[intent])()
+            return {
+                "stop": "Music stopped.",
+                "pause": "Music paused.",
+                "resume": "Resuming music.",
+                "next": "Skipping to the next track.",
+                "previous": "Going back one track.",
+            }[intent]
+    except Exception as error:
+        print(f"[MUSIC ERROR] {error}")
+        return "Music Assistant is unavailable. Check its connection and settings."
 
 # =========================
 # COMMAND HANDLER
@@ -261,7 +252,9 @@ def handle_command(text):
     run_conversation_callbacks("user", text)
 
     # MUSIC FIRST (IMPORTANT)
-    if handle_music_command(text):
+    music_response = handle_music_command(text)
+    if music_response is not None:
+        respond_to_turn(text, music_response)
         return
 
     # NEWS
@@ -269,26 +262,24 @@ def handle_command(text):
         raw_news = handle_news_command(text)
 
         if raw_news and not raw_news.startswith("Sorry"):
-            prompt = f"""
-You are IRIS.
-
-Here are news headlines:
-{raw_news}
-
-Explain simply and conversationally.
-"""
+            prompt = add_conversation_context(
+                f"Here are news headlines:\n{raw_news}\n\n"
+                "Explain them simply and conversationally, using the recent "
+                "conversation only to understand the user's request."
+            )
             try:
-                resp = ollama.generate(model="iris", prompt=prompt)
+                resp = ollama.generate(
+                    model=OLLAMA_MODEL, prompt=prompt, keep_alive=OLLAMA_KEEP_ALIVE
+                )
                 raw = resp.get("response", "")
             except Exception:
-                speak(raw_news)
+                respond_to_turn(text, raw_news)
                 return
 
             tts_text = clean_for_tts(raw)
 
             if tts_text:
-                speak(tts_text)
-                run_conversation_callbacks("assistant", tts_text)
+                respond_to_turn(text, tts_text)
             return
 
     # WEATHER / NORMAL LLM
@@ -300,37 +291,61 @@ Explain simply and conversationally.
         except:
             pass
 
+    prompt = add_conversation_context(prompt)
     try:
-        resp = ollama.generate(model="iris", prompt=prompt)
-    except:
-        speak("Sorry, I had trouble responding.")
+        resp = ollama.generate(
+            model=OLLAMA_MODEL, prompt=prompt, keep_alive=OLLAMA_KEEP_ALIVE
+        )
+    except Exception as error:
+        print("[OLLAMA ERROR]", error)
+        respond_to_turn(text, "Sorry, I had trouble responding.")
         return
 
     raw = resp.get("response", "")
     tts_text = clean_for_tts(raw)
 
     if tts_text:
-        speak(tts_text)
-        run_conversation_callbacks("assistant", tts_text)
+        respond_to_turn(text, tts_text)
 
 # =========================
 # AUDIO PROCESSING
 # =========================
-audio_q = queue.Queue()
+audio_q = queue.Queue(maxsize=5)
 awake = False
 last_final_time = 0
+audio_busy = False
 
 vosk_model = Model(VOSK_MODEL_PATH)
-recognizer = KaldiRecognizer(vosk_model, VOSK_SR)
-recognizer.SetWords(True)
+
+def create_recognizer(wake_only=False):
+    if wake_only:
+        result = KaldiRecognizer(vosk_model, VOSK_SR, WAKE_GRAMMAR)
+    else:
+        result = KaldiRecognizer(vosk_model, VOSK_SR)
+    result.SetWords(True)
+    return result
+
+def clear_audio_queue():
+    while True:
+        try:
+            audio_q.get_nowait()
+        except queue.Empty:
+            return
+
+recognizer = create_recognizer(wake_only=True)
 
 def audio_callback(indata, frames, time_info, status):
+    if audio_busy:
+        return
     if status:
         print("[sd status]", status, file=sys.stderr)
-    audio_q.put(bytes(indata))
+    try:
+        audio_q.put_nowait(bytes(indata))
+    except queue.Full:
+        pass
 
 def process_audio():
-    global awake, last_final_time
+    global awake, audio_busy, last_final_time, recognizer
 
     while True:
         data = audio_q.get()
@@ -355,13 +370,27 @@ def process_audio():
             print("[VOSK final]:", text)
 
             if not awake:
-                if WAKE_WORD in text:
+                if re.search(rf"\b{re.escape(WAKE_WORD.lower())}\b", text):
                     awake = True
-                    speak("Hello!")
+                    recognizer = create_recognizer()
+                    audio_busy = True
+                    clear_audio_queue()
+                    try:
+                        speak("Hello!")
+                    finally:
+                        clear_audio_queue()
+                        audio_busy = False
                 continue
 
-            handle_command(text)
-            awake = False
+            audio_busy = True
+            clear_audio_queue()
+            try:
+                handle_command(text)
+            finally:
+                clear_audio_queue()
+                recognizer = create_recognizer(wake_only=True)
+                awake = False
+                audio_busy = False
 
 # =========================
 # MAIN

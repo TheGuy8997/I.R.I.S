@@ -27,13 +27,14 @@ Tone & Brevity:
     Do not provide unsolicited elaboration, examples, or multiple options.
     If more detail is needed, reply exactly: "I can expand — want more?"
     Always answer directly first.
+    Use recent conversation included in the prompt to understand follow-up questions. Prioritize the current request.
     If a needed location is missing, ask for it in one short sentence.
     If an external API fails, apologize briefly, state the failure, and suggest trying again later in one short sentence.
 
 You chat, answer questions, and respond clearly and concisely.
 """
 
-PARAMETER num_predict 128
+PARAMETER num_predict 64
 PARAMETER temperature 0.25
 PARAMETER top_p 0.30
 PARAMETER repeat_penalty 1.15

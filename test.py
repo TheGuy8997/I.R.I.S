@@ -1,4 +1,12 @@
-from music import search_music, play_media, stop, resume
+from music import (
+    next_track,
+    pause,
+    play_media,
+    previous_track,
+    resume,
+    search_music,
+    stop,
+)
 
 def main():
     print("\n🎧 === IRIS MUSIC TEST ===\n")
@@ -19,6 +27,10 @@ def main():
     choice = input("\n🎯 Pick index (ENTER = 0): ").strip()
     idx = int(choice) if choice.isdigit() else 0
 
+    if idx >= len(results):
+        print("❌ Selection is outside the result list")
+        return
+
     track = results[idx]
 
     print("\n🎵 Playing:\n", track)
@@ -27,16 +39,20 @@ def main():
     print("\n[PLAY RESPONSE]", res)
 
     while True:
-        cmd = input("\n(stop / pause / resume / next / quit): ").strip().lower()
+        cmd = input(
+            "\n(stop / pause / resume / next / previous / quit): "
+        ).strip().lower()
 
         if cmd == "stop":
             print(stop())
         elif cmd == "pause":
-            print(stop())
+            print(pause())
         elif cmd == "resume":
             print(resume())
         elif cmd == "next":
             print(next_track())
+        elif cmd == "previous":
+            print(previous_track())
         elif cmd == "quit":
             break
 

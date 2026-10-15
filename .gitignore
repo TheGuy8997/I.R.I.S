@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+iris/
+__pycache__/
+*.py[cod]
+models/
+*.onnx
+*.onnx.json

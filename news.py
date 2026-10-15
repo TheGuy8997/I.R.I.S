@@ -4,13 +4,14 @@
 
 import requests
 import time
+import os
 from datetime import datetime
 
 # =========================
 # CONFIG
 # =========================
 
-API_TOKEN = "4ff73a1f-fd9d-4986-8a2e-7d8fcf0ed06e"
+API_TOKEN = os.getenv("WEBZ_API_TOKEN", "").strip()
 API_URL = "https://api.webz.io/newsApiLite"
 
 NEWS_CACHE = {
@@ -64,6 +65,10 @@ def categorize_news_request(text: str) -> str:
 
 def fetch_news(category: str):
     """Low-level API fetcher"""
+
+    if not API_TOKEN:
+        print("[NEWS ERROR] WEBZ_API_TOKEN is not configured")
+        return []
 
     query = category
 
